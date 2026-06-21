@@ -41,12 +41,14 @@ async def send_admin_menu(update, ctx):
     total_gained = sum(max(0, v["views"] - v["views_at_period_start"]) for v in all_videos)
 
     # Считаем общий прогноз с учётом индивидуальных тарифов
+    # Если прироста нет — берём текущие просмотры
     total_payout = 0
     if period:
         for v in all_videos:
             rate = get_creator_rate(v["creator_id"], period["id"])
             gained = max(0, v["views"] - v["views_at_period_start"])
-            total_payout += calc_payout(gained, 1, rate)
+            views_for_calc = gained if gained > 0 else v["views"]
+            total_payout += calc_payout(views_for_calc, 1, rate)
 
     lines = [
         "👑 Админ-панель D-Creator", "",
@@ -91,11 +93,14 @@ async def admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             videos = get_videos_by_creator(c["id"])
             rate = get_creator_rate(c["id"], period["id"]) if period else {"rate_type":"per_1000","rate_value":60,"rate_fix":0}
             gained = sum(max(0, v["views"] - v["views_at_period_start"]) for v in videos)
-            payout = calc_payout(gained, len(videos), rate)
+            total_views = sum(v["views"] for v in videos)
+            views_for_calc = gained if gained > 0 else total_views
+            payout = calc_payout(views_for_calc, len(videos), rate)
             rate_str = (f"{rate['rate_value']:.0f}₽/1000" if rate["rate_type"] == "per_1000"
                         else f"{rate['rate_fix']:.0f}₽+{rate['rate_value']:.0f}₽/1000")
+            payout_note = "" if gained > 0 else " *"
             lines.append(f"👤 {c['name']} (@{c['username'] or c['tg_id']})\n"
-                         f"   🎬 {len(videos)} р. | +{gained:,} просм. | {payout:.2f}₽ | 💲{rate_str}")
+                         f"   🎬 {len(videos)} р. | 👁 {total_views:,} | +{gained:,} | 💰{payout:.2f}₽{payout_note} | 💲{rate_str}")
             kb.append([InlineKeyboardButton(f"👤 {c['name']}", callback_data=f"adm_creator_{c['id']}")])
         kb.append([InlineKeyboardButton("◀️ Назад", callback_data="adm_back")])
         await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
@@ -132,17 +137,34 @@ async def admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not all_videos:
             await query.edit_message_text("Нет роликов.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="adm_back")]]))
             return
-        lines = [f"🎬 Все ролики ({len(all_videos)} шт.):\n"]
-        for v in all_videos[:40]:
+
+        await query.edit_message_text(f"🎬 Все ролики ({len(all_videos)} шт.) — отправляю список...")
+
+        for v in all_videos:
             icon = {"youtube":"📺","tiktok":"🎵","instagram":"📸"}.get(v["platform"],"🎬")
             gained = max(0, v["views"] - v["views_at_period_start"])
             rate = get_creator_rate(v["creator_id"], period["id"]) if period else {"rate_type":"per_1000","rate_value":60,"rate_fix":0}
-            payout = calc_payout(gained, 1, rate)
-            pending_s = f" ⏳{v['pending_views']:,}" if v["pending_views"] else ""
-            title = (v["title"] or "—")[:25]
-            lines.append(f"{icon} {v['creator_name']} — {title}\n   👁{v['views']:,}{pending_s} | +{gained:,} | {payout:.2f}₽")
-        kb = [[InlineKeyboardButton("◀️ Назад", callback_data="adm_back")]]
-        await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
+            # Если прирост 0 — считаем по текущим просмотрам
+            views_for_calc = gained if gained > 0 else v["views"]
+            payout = calc_payout(views_for_calc, 1, rate)
+            pending_s = f"\n   ⏳ На проверке: {v['pending_views']:,} просм." if v["pending_views"] else ""
+            title = (v["title"] or "Без названия")[:40]
+            gained_note = f"+{gained:,}" if gained > 0 else f"{v['views']:,} (все просм.)"
+
+            text = (
+                f"{icon} {title}\n"
+                f"👤 {v['creator_name']}\n"
+                f"👁 Просмотров: {v['views']:,}\n"
+                f"📈 Прирост за период: {gained_note}\n"
+                f"💰 К выплате: {payout:.2f} ₽{pending_s}\n"
+                f"🔗 {v['url']}"
+            )
+            await ctx.bot.send_message(query.from_user.id, text)
+
+        await ctx.bot.send_message(
+            query.from_user.id, "✅ Список роликов отправлен.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data="adm_back")]])
+        )
 
     # ── Instagram на проверке ──
     elif data == "adm_instagram":
