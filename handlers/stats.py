@@ -25,27 +25,41 @@ async def stats_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     total_gained = yt_gained = tt_gained = ig_gained = 0
+    total_views = yt_views = tt_views = ig_views = 0
     yt_c = tt_c = ig_c = 0
 
     for v in videos:
         g = max(0, v["views"] - v["views_at_period_start"])
         total_gained += g
-        if v["platform"] == "youtube": yt_gained += g; yt_c += 1
-        elif v["platform"] == "tiktok": tt_gained += g; tt_c += 1
-        elif v["platform"] == "instagram": ig_gained += g; ig_c += 1
+        total_views += v["views"]
+        if v["platform"] == "youtube":
+            yt_gained += g; yt_views += v["views"]; yt_c += 1
+        elif v["platform"] == "tiktok":
+            tt_gained += g; tt_views += v["views"]; tt_c += 1
+        elif v["platform"] == "instagram":
+            ig_gained += g; ig_views += v["views"]; ig_c += 1
 
-    total_payout = calc_payout(total_gained, len(videos), rate)
+    # Если прирост за период = 0 (все ролики добавлены в этом периоде),
+    # считаем прогноз по текущим просмотрам
+    views_for_payout = total_gained if total_gained > 0 else total_views
+    total_payout = calc_payout(views_for_payout, len(videos), rate)
+
+    payout_note = "" if total_gained > 0 else "\n   ⚠️ Ролики только добавлены — считается по текущим просмотрам"
 
     lines = [
         f"📊 Статистика — {creator['name']}",
         f"📅 {period['start_date']} — {period['end_date']}" if period else "",
         f"💲 Тариф: {rate_str}", "",
-        "━━━ Прирост за период ━━━",
+        "━━━ Просмотры за период ━━━",
     ]
-    if yt_c: lines.append(f"📺 YouTube ({yt_c} р.): +{yt_gained:,}")
-    if tt_c: lines.append(f"🎵 TikTok ({tt_c} р.): +{tt_gained:,}")
-    if ig_c: lines.append(f"📸 Instagram ({ig_c} р.): +{ig_gained:,}")
-    lines += ["", f"📈 Итого: +{total_gained:,} просм.", f"💰 Прогноз выплаты: {total_payout:,.2f} ₽"]
+    if yt_c: lines.append(f"📺 YouTube ({yt_c} р.): {yt_views:,} просм. / +{yt_gained:,} прирост")
+    if tt_c: lines.append(f"🎵 TikTok ({tt_c} р.): {tt_views:,} просм. / +{tt_gained:,} прирост")
+    if ig_c: lines.append(f"📸 Instagram ({ig_c} р.): {ig_views:,} просм. / +{ig_gained:,} прирост")
+    lines += [
+        "",
+        f"📈 Прирост за период: +{total_gained:,} просм.",
+        f"💰 Прогноз выплаты: {total_payout:,.2f} ₽{payout_note}",
+    ]
 
     await update.message.reply_text("\n".join(lines), reply_markup=main_menu())
 

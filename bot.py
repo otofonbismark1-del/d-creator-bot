@@ -115,6 +115,16 @@ async def _process_video_link(update: Update, ctx, url: str):
     rate_str = (f"{rate['rate_value']:.0f} ₽/1000 просм." if rate["rate_type"] == "per_1000"
                 else f"{rate['rate_fix']:.0f}₽ за ролик + {rate['rate_value']:.0f}₽/1000")
 
+    # Проверка дубликата
+    from database import get_videos_by_creator
+    existing = get_videos_by_creator(creator["id"])
+    if any(v["url"].rstrip("/") == url.rstrip("/") for v in existing):
+        await update.message.reply_text(
+            "⚠️ Этот ролик уже добавлен!\n\nОтправь другую ссылку или нажми 📊 Статистика.",
+            reply_markup=main_menu()
+        )
+        return
+
     if platform == "youtube":
         vid_id = get_youtube_video_id(url)
         if not vid_id:
@@ -126,16 +136,27 @@ async def _process_video_link(update: Update, ctx, url: str):
             await update.message.reply_text("❌ Ошибка YouTube API. Проверь ключ в Railway.")
             return
         add_video_db(creator["id"], "youtube", url, title, views)
+        payout_now = calc_payout(views, 1, rate)
         await update.message.reply_text(
-            f"✅ YouTube ролик добавлен!\n\n🎬 {title}\n📊 {views:,} просм.\n💲 Тариф: {rate_str}",
+            f"✅ YouTube ролик добавлен!\n\n"
+            f"🎬 {title}\n"
+            f"📊 Просмотров сейчас: {views:,}\n"
+            f"💰 Прогноз выплаты: {payout_now:,.2f} ₽\n"
+            f"💲 Тариф: {rate_str}",
             reply_markup=main_menu()
         )
 
     elif platform == "tiktok":
         title, views = fetch_tiktok_views(url)
-        add_video_db(creator["id"], "tiktok", url, title, views or 0)
+        views = views or 0
+        add_video_db(creator["id"], "tiktok", url, title, views)
+        payout_now = calc_payout(views, 1, rate)
         await update.message.reply_text(
-            f"✅ TikTok ролик добавлен!\n\n🎬 {title}\n📊 {views or 0:,} просм.\n💲 Тариф: {rate_str}",
+            f"✅ TikTok ролик добавлен!\n\n"
+            f"🎬 {title}\n"
+            f"📊 Просмотров сейчас: {views:,}\n"
+            f"💰 Прогноз выплаты: {payout_now:,.2f} ₽\n"
+            f"💲 Тариф: {rate_str}",
             reply_markup=main_menu()
         )
 
