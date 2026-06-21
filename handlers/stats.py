@@ -1,90 +1,53 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from database import get_creator, get_videos_by_creator, get_current_period, get_payouts_by_creator, get_all_periods
-from datetime import date
-
-def calc_payout(views_gained, video_count, period):
-    if not period:
-        return 0
-    if period["rate_type"] == "per_1000":
-        return round(views_gained / 1000 * period["rate_value"], 2)
-    return round(video_count * period["rate_fix"] + views_gained / 1000 * period["rate_value"], 2)
+from database import (get_creator, get_videos_by_creator, get_current_period,
+                      get_payouts_by_creator, get_creator_rate, calc_payout)
+from handlers.start import main_menu
 
 async def stats_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
     creator = get_creator(tg_id)
     if not creator:
-        await update.message.reply_text("❗ Сначала зарегистрируйся — напиши /start")
+        await update.message.reply_text("❗ Сначала зарегистрируйся — /start")
         return
 
     videos = get_videos_by_creator(creator["id"])
     period = get_current_period()
+    rate = get_creator_rate(creator["id"], period["id"]) if period else {"rate_type":"per_1000","rate_value":60,"rate_fix":0}
 
-    # Тариф
-    if period:
-        if period["rate_type"] == "per_1000":
-            rate_str = f"{period['rate_value']:.0f} ₽ / 1 000 просм."
-        else:
-            rate_str = f"{period['rate_fix']:.0f} ₽ за ролик + {period['rate_value']:.0f} ₽ / 1 000 просм."
-    else:
-        rate_str = "—"
+    rate_str = (f"{rate['rate_value']:.0f} ₽/1000 просм." if rate["rate_type"] == "per_1000"
+                else f"{rate['rate_fix']:.0f}₽ за ролик + {rate['rate_value']:.0f}₽/1000")
 
     if not videos:
         await update.message.reply_text(
-            f"📭 У тебя пока нет роликов.\n\n"
-            f"💲 Текущий тариф: {rate_str}\n\n"
-            f"➕ Добавить ролик: /add"
+            f"📭 Роликов нет.\n\n💲 Тариф: {rate_str}", reply_markup=main_menu()
         )
         return
 
-    total_views = sum(v["views"] for v in videos)
-    total_gained = sum(max(0, v["views"] - v["views_at_period_start"]) for v in videos)
-
-    yt_views = yt_gained = yt_count = 0
-    tt_views = tt_gained = tt_count = 0
-    ig_views = ig_gained = ig_count = 0
+    total_gained = yt_gained = tt_gained = ig_gained = 0
+    yt_c = tt_c = ig_c = 0
 
     for v in videos:
-        gained = max(0, v["views"] - v["views_at_period_start"])
-        if v["platform"] == "youtube":
-            yt_views += v["views"]; yt_gained += gained; yt_count += 1
-        elif v["platform"] == "tiktok":
-            tt_views += v["views"]; tt_gained += gained; tt_count += 1
-        elif v["platform"] == "instagram":
-            ig_views += v["views"]; ig_gained += gained; ig_count += 1
+        g = max(0, v["views"] - v["views_at_period_start"])
+        total_gained += g
+        if v["platform"] == "youtube": yt_gained += g; yt_c += 1
+        elif v["platform"] == "tiktok": tt_gained += g; tt_c += 1
+        elif v["platform"] == "instagram": ig_gained += g; ig_c += 1
 
-    total_payout = calc_payout(total_gained, len(videos), period)
-    today = date.today()
+    total_payout = calc_payout(total_gained, len(videos), rate)
 
     lines = [
         f"📊 Статистика — {creator['name']}",
-        "",
-        f"📅 Период: {period['start_date']} — {period['end_date']}" if period else "",
-        f"💲 Тариф: {rate_str}",
-        "",
-        "━━━━━ Просмотры за период ━━━━━",
+        f"📅 {period['start_date']} — {period['end_date']}" if period else "",
+        f"💲 Тариф: {rate_str}", "",
+        "━━━ Прирост за период ━━━",
     ]
-    if yt_count:
-        lines.append(f"📺 YouTube ({yt_count} р.): +{yt_gained:,} просм.")
-    if tt_count:
-        lines.append(f"🎵 TikTok ({tt_count} р.): +{tt_gained:,} просм.")
-    if ig_count:
-        lines.append(f"📸 Instagram ({ig_count} р.): +{ig_gained:,} просм.")
+    if yt_c: lines.append(f"📺 YouTube ({yt_c} р.): +{yt_gained:,}")
+    if tt_c: lines.append(f"🎵 TikTok ({tt_c} р.): +{tt_gained:,}")
+    if ig_c: lines.append(f"📸 Instagram ({ig_c} р.): +{ig_gained:,}")
+    lines += ["", f"📈 Итого: +{total_gained:,} просм.", f"💰 Прогноз выплаты: {total_payout:,.2f} ₽"]
 
-    lines += [
-        "",
-        f"📈 Итого прирост: +{total_gained:,} просм.",
-        f"👁 Всего просмотров: {total_views:,}",
-        f"💰 Прогноз выплаты: {total_payout:,.2f} ₽",
-        "",
-        "📋 Команды:",
-        "➕ /add — добавить ролик",
-        "🎬 /myvideos — мои ролики",
-        "🔄 /refresh — обновить просмотры",
-        "📅 /periods — отчётные периоды",
-    ]
-
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n".join(lines), reply_markup=main_menu())
 
 async def periods_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     tg_id = update.effective_user.id
@@ -94,40 +57,29 @@ async def periods_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     period = get_current_period()
-    payouts = get_payouts_by_creator(creator["id"])
     videos = get_videos_by_creator(creator["id"])
+    payouts = get_payouts_by_creator(creator["id"])
+
+    rate = get_creator_rate(creator["id"], period["id"]) if period else {"rate_type":"per_1000","rate_value":60,"rate_fix":0}
     total_gained = sum(max(0, v["views"] - v["views_at_period_start"]) for v in videos)
-    current_payout = calc_payout(total_gained, len(videos), period)
+    current_payout = calc_payout(total_gained, len(videos), rate)
+    rate_str = (f"{rate['rate_value']:.0f}₽/1000" if rate["rate_type"] == "per_1000"
+                else f"{rate['rate_fix']:.0f}₽ + {rate['rate_value']:.0f}₽/1000")
 
-    lines = [
-        "📅 Отчётные периоды",
-        "",
-    ]
-
-    # Текущий период
+    lines = ["📅 Отчётные периоды\n"]
     if period:
-        if period["rate_type"] == "per_1000":
-            rate_str = f"{period['rate_value']:.0f} ₽/1000 просм."
-        else:
-            rate_str = f"{period['rate_fix']:.0f}₽ за ролик + {period['rate_value']:.0f}₽/1000"
         lines += [
-            f"🟢 Текущий период",
-            f"   📅 {period['start_date']} — {period['end_date']}",
+            f"🟢 Текущий: {period['start_date']} — {period['end_date']}",
             f"   💲 Тариф: {rate_str}",
             f"   📈 Прирост: +{total_gained:,} просм.",
-            f"   💰 Текущая оценка: {current_payout:,.2f} ₽",
-            "",
+            f"   💰 Оценка: {current_payout:,.2f} ₽", ""
         ]
 
-    # История выплат
     if payouts:
         lines.append("💸 История выплат:")
         for p in payouts:
-            lines.append(
-                f"   🔒 {p['start_date']} — {p['end_date']}\n"
-                f"      📈 +{p['views_gained']:,} просм. | 💰 {p['amount']:.2f} ₽"
-            )
+            lines.append(f"   🔒 {p['start_date']} — {p['end_date']}: {p['amount']:.2f} ₽ (+{p['views_gained']:,} просм.)")
     else:
-        lines.append("💸 История выплат: пока пусто")
+        lines.append("💸 Выплат пока не было.")
 
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\n".join(lines), reply_markup=main_menu())
